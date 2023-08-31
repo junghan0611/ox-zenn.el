@@ -56,7 +56,7 @@ Jegil: https://junghanacs.com/"
     (paragraph . org-jegil-paragraph)
     (strike-through . org-jegil-strike-through)
     (src-block . org-jegil-src-block)
-    ;; (link . org-jegil-link)
+    (link . org-jegil-link)
     (quote-block . org-jegil-quote-block)
     (latex-fragment . org-jegil-latex-fragment)
     (footnote-reference . org-jegil-footnote-reference)
@@ -263,12 +263,26 @@ see `ox-md--headline-referred-p'."
              ))
        info t))))
 
-(defun org-jegil-link (link contents info)
+;; (defun obsidian-insert-wikilink (&optional arg)
+;;   "Insert a link to file in wikiling format."
+;;   (interactive "P")
+;;   (let* ((file (obsidian--request-link arg))
+;;          (filename (plist-get file :file))
+;;          (description (plist-get file :description))
+;;          (no-ext (file-name-sans-extension filename))
+;;          (link (if (and description (not (s-ends-with-p description no-ext)))
+;;                    (s-concat "[[" no-ext "|" description"]]")
+;;                  (s-concat "[[" no-ext "]]"))))
+;;     (insert link)))
+
+(defun org-jegil-link (link desc info)
   "Transcode LINK object into Markdown format.
 CONTENTS is the link's description.  INFO is a plist used as
 a communication channel."
-  (let* ((type (org-element-property :type link))
-         (path (org-element-property :path link))
+  (let* (
+         (type (org-element-property :type link))
+         ;; (path (org-element-property :path link))
+         (raw-path (org-element-property :path link))
          (parent (org-export-get-parent link))
          (attr (org-export-read-attribute :attr_html parent))
          (urlp (member type '("http" "https" "ftp" "mailto"))))
@@ -276,7 +290,7 @@ a communication channel."
      ((org-export-inline-image-p link org-html-inline-image-rules)
       (format "![%s](%s%s)"
               (or (plist-get attr :alt) "")
-              (if urlp (concat type ":" path) path)
+              (if urlp (concat type ":" raw-path) raw-path)
               (let ((width (plist-get attr :width)))
                 (or (when width
                       (concat
@@ -284,13 +298,76 @@ a communication channel."
                        (replace-regexp-in-string "px" "x" width)))
                     ""))))
      ((string= type "fuzzy")
-      (or (when (string-match "\\([a-z0-9-]+\\)://\\(.*\\)" path)
-            (let ((scheme (match-string 1 path))
-                  (value (match-string 2 path)))
+      (or (when (string-match "\\([a-z0-9-]+\\)://\\(.*\\)" raw-path)
+            (let ((scheme (match-string 1 raw-path))
+                  (value (match-string 2 raw-path)))
               (format "@[%s](%s)" scheme value)))
-          (org-md-link link contents info)))
+          (org-md-link link desc info)))
+     ((string= type "id")
+        (let ((destination (if (string= type "id")
+                               (org-export-resolve-id-link link info)
+                             (org-export-resolve-id-link link info))))
+          ;; (message "[org-jegil-link DBG] destination: %s" destination)
+
+          (pcase (org-element-type destination)
+            ;; (`plain-text			; External file.
+            ;;  (let ((path (funcall link-org-files-as-md destination)))
+            ;;    (if (not desc) (format "<%s>" path)
+            ;;      (format "[%s](%s)" desc path))))
+            (`plain-text
+             (let ((path (progn
+                           ;; Treat links to `file.org' as links to `file.md'.
+                           (if (string= ".org" (downcase (file-name-extension destination ".")))
+                               (concat (file-name-sans-extension destination) ".md")
+                             destination))))
+               ;; (message "[org-jegil-link DBG] plain-text path: %s" path)
+               ;; (message "[org-jegil-link DBG] plain-text name %s"
+               ;;          (file-name-sans-extension destination))
+               (if (org-id-find-id-file raw-path)
+                   ;; (let* ((anchor (org-hugo-link--heading-anchor-maybe link info))
+                   ;;        (ref (if (and (org-string-nw-p anchor)
+                   ;;                      (not (string-prefix-p "#" anchor)))
+                   ;;                 ;; If the "anchor" doesn't begin with
+                   ;;                 ;; "#", it's a direct reference to a
+                   ;;                 ;; post subtree.
+                   ;;                 anchor
+                   ;;               (concat path anchor))))
+                   ;;   ;; (message "[org-hugo-link DBG] plain-text org-id anchor: %S" anchor)
+                   ;;   (format "[%s]({{< relref \"%s\" >}})" (or desc path) ref))
+                   (if desc
+                       ;; (format "[%s](%s)" desc path)
+                       (format "[[%s]]" (file-name-sans-extension destination))
+                 (format "<%s>" path)))))
+            (`headline
+             (format
+              "[%s](#%s)"
+              ;; Description.
+              (cond ((org-string-nw-p desc))
+                    ((org-export-numbered-headline-p destination info)
+                     (mapconcat #'number-to-string
+                                (org-export-get-headline-number destination info)
+                                "."))
+                    (t (org-export-data (org-element-property :title destination)
+                                      info)))
+            ;; Reference.
+            (or (org-element-property :CUSTOM_ID destination)
+                (org-export-get-reference destination info))))
+          (_
+           (let ((description
+                  (or (org-string-nw-p desc)
+                      (let ((number (org-export-get-ordinal destination info)))
+                        (cond
+                         ((not number) nil)
+                         ((atom number) (number-to-string number))
+                         (t (mapconcat #'number-to-string number ".")))))))
+             (when description
+               (format "[%s](#%s)"
+                       description
+                       (org-export-get-reference destination info))))))
+        )
+      )
      (t
-      (org-md-link link contents info)))))
+      (org-md-link link desc info)))))
 
 (defun org-jegil-quote-block (quote-block contents info)
   "Transcode QUOTE-BLOCK element into Markdown format.
